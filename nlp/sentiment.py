@@ -66,13 +66,25 @@ def _resolve_device(device: str) -> int | str:
     """Resolve a device string to a value accepted by ``pipeline(device=...)``.
 
     * ``"cpu"`` → ``-1``
-    * ``"mps"`` → ``-1`` if MPS is unavailable, else ``"mps"``.
+    * ``"cuda"`` → ``0`` if CUDA is available, else ``-1`` (CPU).
+    * ``"mps"`` → ``"mps"`` if MPS is available, else ``-1`` (CPU).
 
     Returns
     -------
-    ``-1`` (CPU) or ``"mps"``.
+    ``-1`` (CPU), ``0`` (CUDA), or ``"mps"``.
     """
     if device == "cpu":
+        return -1
+    if device == "cuda":
+        try:
+            import torch  # noqa: F811
+
+            if torch.cuda.is_available():
+                logger.info("CUDA device is available, using CUDA (device=0).")
+                return 0
+            logger.warning("CUDA requested but not available; falling back to CPU.")
+        except ImportError:
+            logger.warning("torch not available; falling back to CPU.")
         return -1
     if device == "mps":
         try:
