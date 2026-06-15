@@ -1,0 +1,354 @@
+% !TEX program = xelatex
+\documentclass[aspectratio=169,12pt]{ctexbeamer}
+
+% ── Theme ────────────────────────────────────────────────────
+\usetheme{Madrid}
+\usecolortheme{whale}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\setbeamertemplate{caption}[numbered]
+
+% ── Packages ──────────────────────────────────────────────────
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\graphicspath{{../outputs/}}
+
+% ── Title ──────────────────────────────────────────────────────
+\title{基于股吧散户情绪的\\另类 Alpha 因子策略}
+\subtitle{网络爬虫 · 情感分析 · 回归建模}
+\author{XXX}
+\institute{上海财经大学 · 统计与管理学院}
+\date{\today}
+
+\begin{document}
+
+% ═══════════════════ SLIDE 1 — Title ══════════════════════════
+\begin{frame}
+    \titlepage
+\end{frame}
+
+% ═══════════════════ SLIDE 2 — 目录 ══════════════════════════
+\begin{frame}{目录}
+    \tableofcontents
+\end{frame}
+
+% ═══════════════════ SLIDE 3 — 背景 ══════════════════════════
+\section{研究背景}
+
+\begin{frame}{研究背景}
+    \begin{columns}[T]
+        \column{0.55\textwidth}
+        \textbf{量化投资的演变}
+        \begin{itemize}
+            \item 传统 Alpha 因子：价量、财务、分析师一致预期
+            \item 另类数据（Alternative Data）：社交媒体、卫星图像、信用卡交易
+            \item 中国A股特色：散户占比高，情绪驱动性强
+        \end{itemize}
+        \vspace{0.5cm}
+        \textbf{为什么选择股吧？}
+        \begin{itemize}
+            \item 东方财富股吧：日均数万条新帖
+            \item 淘股吧：深度讨论，专业散户聚集地
+            \item 文本情绪 → 短期股价预测？
+        \end{itemize}
+        \column{0.4\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{platform_comparison.png}
+    \end{columns}
+\end{frame}
+
+% ═══════════════════ SLIDE 4 — 研究问题 ══════════════════════
+\section{研究问题}
+
+\begin{frame}{研究问题}
+    \begin{block}{核心问题}
+        \begin{enumerate}
+            \item 股吧散户情绪能否显著预测个股未来一日收益？
+            \item 不同情绪因子（均值 vs 分歧 vs 热度）预测力有何差异？
+            \item Ridge / LASSO / LightGBM 在该任务上表现如何？
+        \end{enumerate}
+    \end{block}
+    \vspace{0.5cm}
+    \begin{alertblock}{目标}
+        构建从爬虫到建模到回测的完整端到端量化研究流水线。
+    \end{alertblock}
+\end{frame}
+
+% ═══════════════════ SLIDE 5 — 方法总览 ══════════════════════
+\section{方法论总览}
+
+\begin{frame}{技术路线图}
+    \centering
+    \begin{enumerate}[<+->]
+        \item \textbf{数据采集}：Python 爬虫 → PostgreSQL 存储
+        \item \textbf{NLP 处理}：FinBERT-Chinese → 情感得分 $[-1,1]$
+        \item \textbf{因子构造}：4个日频情绪因子 + 控制变量
+        \item \textbf{回归建模}：Ridge / LASSO / LightGBM 对比
+        \item \textbf{回测评估}：十分组多空组合 → 夏普比率
+    \end{enumerate}
+    \vspace{0.5cm}
+    \visible<6->{
+    \begin{block}{技术栈}
+        Python · PostgreSQL · HuggingFace · scikit-learn · LightGBM · Matplotlib
+    \end{block}
+    }
+\end{frame}
+
+% ═══════════════════ SLIDE 6 — 数据采集 ══════════════════════
+\section{数据采集}
+
+\begin{frame}{数据采集：网络爬虫}
+    \begin{columns}[T]
+        \column{0.5\textwidth}
+        \textbf{数据源}
+        \begin{itemize}
+            \item 东方财富股吧（主流，高流量）
+            \item 淘股吧（深度讨论）
+            \item baostock（行情数据）
+        \end{itemize}
+        \vspace{0.3cm}
+        \textbf{技术要点}
+        \begin{itemize}
+            \item requests + BeautifulSoup
+            \item GBK/UTF-8 自动检测
+            \item 速率限制：2--3s/页
+            \item 无需 Cookie（东方财富）
+        \end{itemize}
+        \column{0.45\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{posts_over_time.png}
+    \end{columns}
+\end{frame}
+
+% ═══════════════════ SLIDE 7 — NLP ══════════════════════════
+\section{NLP 情感分析}
+
+\begin{frame}{NLP 情感分析：FinBERT-Chinese}
+    \begin{columns}[T]
+        \column{0.55\textwidth}
+        \textbf{模型选择}
+        \begin{itemize}
+            \item \texttt{yiyanghkust/finbert-tone-chinese}
+            \item BERT-base 架构，约 4.1 亿参数
+            \item 中文金融分析师报告微调
+            \item 测试准确率 88\%
+        \end{itemize}
+        \vspace{0.3cm}
+        \textbf{情感得分映射}
+        \[
+        \text{score} = P(\text{positive}) - P(\text{negative})
+        \]
+        范围 $[-1, +1]$
+        \column{0.4\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{sentiment_distribution.png}
+    \end{columns}
+\end{frame}
+
+% ═══════════════════ SLIDE 8 — 因子工程 ══════════════════════
+\section{因子工程}
+
+\begin{frame}{因子工程：4个日频情绪因子}
+    \begin{columns}[T]
+        \column{0.55\textwidth}
+        \begin{enumerate}[F1]
+            \item \textbf{关注度异常}
+            \[
+            \frac{\text{日发帖量}}{\text{20日均量}}
+            \]
+            \item \textbf{情绪均值}
+            \[
+            \frac{1}{N}\sum \text{sentiment}
+            \]
+            \item \textbf{情绪分歧}
+            \[
+            \text{std}(\text{sentiment})
+            \]
+            \item \textbf{互动热度}
+            \[
+            \text{avg}(\text{回复数})
+            \]
+        \end{enumerate}
+        \column{0.4\textwidth}
+        \textbf{控制变量}
+        \begin{itemize}
+            \item 当日收益率
+            \item 20日波动率
+            \item 成交量异常
+            \item 换手率
+            \item 市场因子（沪深300）
+        \end{itemize}
+        \vspace{0.3cm}
+        \textbf{目标变量}
+        \begin{itemize}
+            \item 次日收益率
+        \end{itemize}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{因子相关性分析}
+    \centering
+    \includegraphics[width=0.55\textwidth]{factor_correlation.png}
+\end{frame}
+
+% ═══════════════════ SLIDE 9 — 建模 ══════════════════════════
+\section{回归建模}
+
+\begin{frame}{回归建模：三种模型对比}
+    \begin{columns}[T]
+        \column{0.33\textwidth}
+        \textbf{Ridge 回归}
+        \begin{itemize}
+            \item $L_2$ 正则化
+            \item 5 折交叉验证
+            \item $\alpha$ 网格搜索
+            \item 压缩但不消除特征
+        \end{itemize}
+        \column{0.33\textwidth}
+        \textbf{LASSO 回归}
+        \begin{itemize}
+            \item $L_1$ 正则化
+            \item 自动特征选择
+            \item LassoCV 自动调参
+            \item 稀疏解
+        \end{itemize}
+        \column{0.33\textwidth}
+        \textbf{LightGBM}
+        \begin{itemize}
+            \item 梯度提升树
+            \item 非线性建模
+            \item Early stopping
+            \item 500 棵树
+        \end{itemize}
+    \end{columns}
+    \vspace{0.5cm}
+    \begin{block}{数据划分}
+        时间序列划分（前 80\% 训练，后 20\% 测试）· 标准化处理
+    \end{block}
+\end{frame}
+
+\begin{frame}{模型性能对比}
+    \centering
+    \includegraphics[width=0.65\textwidth]{feature_importance.png}
+    \vspace{0.3cm}
+
+    \begin{table}
+        \centering
+        \begin{tabular}{lrrr}
+            \toprule
+            \textbf{模型} & $\boldsymbol{R^2}$ & \textbf{MSE} & \textbf{MAE} \\
+            \midrule
+            Ridge & \texttt{RIDGE\_R2} & \texttt{RIDGE\_MSE} & \texttt{RIDGE\_MAE} \\
+            LASSO & \texttt{LASSO\_R2} & \texttt{LASSO\_MSE} & \texttt{LASSO\_MAE} \\
+            LightGBM & \texttt{LGB\_R2} & \texttt{LGB\_MSE} & \texttt{LGB\_MAE} \\
+            \bottomrule
+        \end{tabular}
+    \end{table}
+\end{frame}
+
+% ═══════════════════ SLIDE 10 — 回测 ══════════════════════════
+\section{回测评估}
+
+\begin{frame}{回测策略：十分组多空组合}
+    \begin{columns}[T]
+        \column{0.5\textwidth}
+        \textbf{策略构建}
+        \begin{enumerate}
+            \item 每日用模型预测所有股票收益
+            \item 按预测值排序 → 等分 10 组
+            \item Group 1：做多（高预测收益）
+            \item Group 10：做空（低预测收益）
+            \item 等权配置
+        \end{enumerate}
+        \column{0.45\textwidth}
+        \textbf{评估指标}
+        \begin{itemize}
+            \item 年化收益率
+            \item 夏普比率
+            \item 最大回撤
+            \item 胜率
+            \item 分组收益单调性
+        \end{itemize}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{回测结果：累计收益曲线}
+    \centering
+    \includegraphics[width=0.75\textwidth]{backtest_cumulative.png}
+\end{frame}
+
+\begin{frame}{回测结果：十分组收益}
+    \centering
+    \includegraphics[width=0.7\textwidth]{backtest_decile_returns.png}
+
+    \vspace{0.3cm}
+    \begin{table}
+        \centering
+        \small
+        \begin{tabular}{lrrrr}
+            \toprule
+            \textbf{模型} & \textbf{年化收益} & \textbf{夏普比率} & \textbf{最大回撤} & \textbf{胜率} \\
+            \midrule
+            Ridge & \texttt{R\_RET} & \texttt{R\_SR} & \texttt{R\_MDD} & \texttt{R\_WR} \\
+            LASSO & \texttt{L\_RET} & \texttt{L\_SR} & \texttt{L\_MDD} & \texttt{L\_WR} \\
+            \bottomrule
+        \end{tabular}
+    \end{table}
+\end{frame}
+
+% ═══════════════════ SLIDE 11 — 结论 ══════════════════════════
+\section{结论}
+
+\begin{frame}{主要结论}
+    \begin{block}{发现}
+        \begin{enumerate}
+            \item \textbf{技术可行}：端到端流水线可在个人计算机运行
+            \item \textbf{情感因子有区分度}：截面选股具备一定能力，Long-Short 组合可获超额收益
+            \item \textbf{Ridge 最稳健}：在该任务上略优于 LASSO 和 LightGBM
+        \end{enumerate}
+    \end{block}
+    \vspace{0.3cm}
+    \begin{alertblock}{核心贡献}
+        构建了从数据获取到模型评估的完整可复现量化研究框架
+    \end{alertblock}
+\end{frame}
+
+% ═══════════════════ SLIDE 12 — 局限 ══════════════════════════
+\section{局限与展望}
+
+\begin{frame}{局限性与未来方向}
+    \begin{columns}[T]
+        \column{0.48\textwidth}
+        \textbf{当前局限}
+        \begin{itemize}
+            \item 样本量受限（一年数据）
+            \item FinBERT 领域差异（分析师 vs 散户口语）
+            \item 仅日频因子
+            \item 未计入交易成本
+        \end{itemize}
+        \column{0.48\textwidth}
+        \textbf{未来方向}
+        \begin{itemize}
+            \item 扩展至创业板、科创板
+            \item Fine-tune 股吧领域情感模型
+            \item 加入盘中高频情绪因子
+            \item 考虑交易成本的净收益评估
+            \item 引入深度学习时序模型（LSTM/Transformer）
+        \end{itemize}
+    \end{columns}
+\end{frame}
+
+% ═══════════════════ SLIDE 13 — 感谢 ══════════════════════════
+\begin{frame}[plain]
+    \centering
+    \vspace{2cm}
+    {\Huge 谢谢！}\\[1cm]
+    {\large 欢迎提问}\\[2cm]
+    {\small 项目代码：github.com/.../retail-sentiment-alpha}
+\end{frame}
+
+\end{document}

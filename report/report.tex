@@ -1,0 +1,561 @@
+% !TEX program = xelatex
+\documentclass[12pt,a4paper]{ctexart}
+
+% ── Packages ──────────────────────────────────────────────────
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fontawesome5}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=cyan,
+}
+
+\lstset{
+    basicstyle=\small\ttfamily,
+    breaklines=true,
+    backgroundcolor=\color{gray!5},
+    frame=single,
+    numbers=left,
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small 数据科学与数据分析基础 — 期末大作业}
+\fancyhead[R]{\small \thepage}
+
+% ── Title ──────────────────────────────────────────────────────
+\title{
+    \vspace{2cm}
+    {\Huge 基于股吧散户情绪的另类 Alpha 因子策略}\\[0.5cm]
+    {\large ——网络爬虫、情感分析与回归建模}\\[1.5cm]
+    {\normalsize 数据科学与数据分析基础（0976）期末大作业}
+}
+\author{
+    \vspace{0.5cm}
+    \begin{tabular}{rl}
+        \textbf{学号} & \texttt{XXXXXXXXX} \\
+        \textbf{姓名} & \texttt{XXX} \\
+        \textbf{院系} & 统计与管理学院 \\
+        \textbf{专业} & 数据科学 \\
+    \end{tabular}
+}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\newpage
+\tableofcontents
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section{摘要}
+% ═══════════════════════════════════════════════════════════════
+
+本文构建了一套完整的量化投资研究流水线，从网络爬虫获取股吧论坛帖子，到自然语言处理情感打分，再到因子工程与回归建模，最终实现多空投资组合回测。
+
+\textbf{数据采集}方面，使用 Python \texttt{requests} + \texttt{BeautifulSoup} 对东方财富股吧和淘股吧两个平台进行定向爬取，覆盖沪深300全部成分股近一年的帖子数据，共获取 $\sim$\texttt{TOTAL\_POSTS} 条帖子并存入 PostgreSQL 数据库。
+
+\textbf{情感分析}方面，采用 HuggingFace 的 \texttt{finbert-tone-chinese} 预训练模型对帖子文本进行三分类情感打分（正向/中性/负向），映射为 $[-1,1]$ 连续情感得分。
+
+\textbf{因子工程}方面，构建了四个日频情绪因子：关注度异常（\textit{post\_volume\_anomaly}）、情绪均值（\textit{sentiment\_score}）、情绪分歧（\textit{sentiment\_divergence}）、互动热度（\textit{interaction\_intensity}），并与日线行情数据合并形成建模数据集。
+
+\textbf{建模与评估}方面，以次日收益率为目标变量，采用 Ridge 回归、LASSO 回归与 LightGBM 三种模型进行对比，通过时间序列划分训练集与测试集，构建十分组多空组合进行回测，评估各模型的选股能力。
+
+\textbf{关键词}：网络爬虫 · 情感分析 · FinBERT · 岭回归 · LASSO · 另类 Alpha 因子
+
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section{引言}
+% ═══════════════════════════════════════════════════════════════
+
+\subsection{研究背景}
+
+传统量化投资主要依赖财务数据、价量数据等结构化信息构建 Alpha 因子。然而，随着自然语言处理技术的快速发展，越来越多的研究开始关注\textbf{另类数据（Alternative Data）}在投资决策中的价值。其中，社交媒体与投资者论坛的文本数据因其高频、海量、富含情绪信息的特点，成为另类 Alpha 因子研究的热点方向。
+
+中国A股市场以散户投资者为主，东方财富股吧、淘股吧等投资者社区日均产生数万条讨论帖，这些帖子的情绪倾向是否对股价短期走势具有预测能力，是一个具有理论与实践价值的研究问题。
+
+\subsection{研究问题}
+
+本文试图回答以下核心问题：
+
+\begin{enumerate}[label=\textbf{Q\arabic*}, leftmargin=*]
+    \item 股吧论坛的散户情绪是否能显著预测个股未来一日的超额收益？
+    \item 不同的情感因子（情绪均值 vs 情绪分歧 vs 关注热度）在预测能力上有何差异？
+    \item Ridge、LASSO、LightGBM 三种模型在该任务上的表现如何？
+\end{enumerate}
+
+\subsection{创新点}
+
+\begin{itemize}
+    \item \textbf{多平台融合}：同时覆盖东方财富股吧（大流量）和淘股吧（深度讨论），互补数据特征。
+    \item \textbf{中文金融情感模型}：使用 FinBERT-Chinese 预训练模型，避免通用情感词典的领域失配问题。
+    \item \textbf{完整工程流水线}：从爬虫、数据库、NLP 到因子计算、建模、回测，全流程代码化，可复现。
+\end{itemize}
+
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section{数据采集与存储}
+% ═══════════════════════════════════════════════════════════════
+
+\subsection{数据源}
+
+\begin{table}[H]
+    \centering
+    \caption{数据源概览}
+    \begin{tabular}{@{}lllll@{}}
+        \toprule
+        \textbf{平台} & \textbf{URL} & \textbf{帖子量级} & \textbf{是否需要Cookie} & \textbf{反爬强度} \\
+        \midrule
+        东方财富股吧 & guba.eastmoney.com & 高（80帖/页） & 否 & 低（仅频率限制） \\
+        淘股吧 & tgb.cn & 低（25帖/页） & 是 & 中（阿里云验证码） \\
+        \midrule
+        \textbf{行情数据} & baostock (本地查询) & — & 否 & 低 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{爬虫架构}
+
+采用 Python \texttt{requests} + \texttt{BeautifulSoup4} 实现定向爬虫。
+
+\textbf{东方财富股吧}以股票代码为单位，遍历列表页 \texttt{/list,\{code\},f\_\{page\}.html}，每页 80 条帖子，CSS 选择器为 \texttt{tr.listitem} 表格行。列表页直接提取标题、作者、阅读量、评论数、发帖时间等字段，标题即作为帖子正文。详情页通过 \texttt{.xeditor\_content} 选择器提取完整正文。
+
+\textbf{淘股吧}采用双策略互补：一是按股票代码搜索（\texttt{/search/search?searchContent=\{code\}}），二是按 BBS 列表页（\texttt{/bbs/\{page\}/1}）遍历并以标题关键词匹配沪深300股票代码/名称。
+
+\subsection{速率控制与反反爬}
+
+\begin{itemize}
+    \item \textbf{东方财富}：列表页间隔 2--3 秒，股票间间隔 5 秒，每请求最多重试 2 次。
+    \item \textbf{淘股吧}：列表页间隔 1.5--3.0 秒，详情页间隔 0.8--1.5 秒，需携带登录 Cookie。
+    \item \textbf{baostock}：接口间隔 0.2 秒，需 \texttt{bs.login()}/\texttt{logout()} 生命周期管理。
+\end{itemize}
+
+\subsection{数据库设计}
+
+使用 PostgreSQL 16（Docker 部署）存储四张核心表：
+
+\begin{table}[H]
+    \centering
+    \caption{数据库表结构}
+    \begin{tabular}{@{}lll@{}}
+        \toprule
+        \textbf{表名} & \textbf{主键} & \textbf{核心字段} \\
+        \midrule
+        \texttt{posts} & \texttt{id} (自增), \texttt{url} (UNIQUE) & platform, stock\_code, title, content, author, post\_time, read\_count, reply\_count, sentiment \\
+        \texttt{daily\_factors} & \texttt{(stock\_code, trade\_date)} & post\_volume\_anomaly, sentiment\_score, sentiment\_divergence, interaction\_intensity \\
+        \texttt{market\_daily} & \texttt{(stock\_code, trade\_date)} & open, high, low, close, pre\_close, volume, amount, turnover \\
+        \texttt{index\_daily} & \texttt{(idx\_code, trade\_date)} & close (沪深300指数) \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{数据量统计}
+
+\begin{table}[H]
+    \centering
+    \caption{数据量汇总（截至运行日期）}
+    \begin{tabular}{@{}lr@{}}
+        \toprule
+        \textbf{指标} & \textbf{数量} \\
+        \midrule
+        帖子总数 & \texttt{TOTAL\_POSTS} \\
+        有情感分的帖子 & \texttt{SCORED\_POSTS} \\
+        覆盖股票数 & \texttt{UNIQUE\_STOCKS} \\
+        行情数据行数 & \texttt{MARKET\_ROWS} \\
+        因子观测值 & \texttt{FACTOR\_ROWS} \\
+        模型样本量 & \texttt{DATASET\_ROWS} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section{NLP 情感分析}
+% ═══════════════════════════════════════════════════════════════
+
+\subsection{模型选择}
+
+采用 HuggingFace 上的 \texttt{yiyanghkust/finbert-tone-chinese} 预训练模型。该模型基于 \texttt{bert-base-chinese} 架构，使用约 8,000 条人工标注的中文金融分析师报告进行微调，测试准确率 88\%，F1 分数 87\%。
+
+模型输出三分类概率：\texttt{LABEL\_0 = neutral}（中性）、\texttt{LABEL\_1 = positive}（正向）、\texttt{LABEL\_2 = negative}（负向）。
+
+\subsection{情感得分映射}
+
+将三分类概率映射为 $[-1, 1]$ 区间的连续情感得分：
+
+\begin{equation}
+    \text{sentiment} = P(\text{positive}) - P(\text{negative})
+\end{equation}
+
+其中 $+1$ 表示极度正面，$0$ 表示中性（或正负概率相等），$-1$ 表示极度负面。
+
+\subsection{批量推理}
+
+推理在 Mac M-series CPU 上运行（MPS 对 BERT-base 无明显加速），单条推理耗时约 50--60ms。帖子文本预处理：将 \texttt{title + " " + content} 拼接后截断至 512 字符，避免超出模型的输入长度限制。
+
+\textbf{情感得分分布}描述：从 $\sim$\texttt{SCORED\_POSTS} 条帖子来看（见图 \ref{fig:sentiment_dist}），散户情绪整体偏正面（均值约 0.38），标准差约 0.58，两极分化明显——大量帖子包含强烈的看多或看空倾向，中性帖子相对较少。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{../outputs/sentiment_distribution.png}
+    \caption{情感得分分布直方图}
+    \label{fig:sentiment_dist}
+\end{figure}
+
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section{因子工程}
+% ═══════════════════════════════════════════════════════════════
+
+\subsection{日频情绪因子构造}
+
+对每个股票-交易日，从 \texttt{posts} 表中聚合构造以下四个因子：
+
+\begin{enumerate}[label=\textbf{F\arabic*}, leftmargin=*]
+    \item \textbf{关注度异常（post\_volume\_anomaly）}
+    \begin{equation}
+        \text{F1}_{i,t} = \frac{\text{posts\_count}_{i,t}}{\text{MA20}(\text{posts\_count}_{i,t})}
+    \end{equation}
+    其中 $\text{MA20}$ 为 20 日滑动均值。当某日帖子数远超近期均值时，表明该股票受到异常关注。
+
+    \item \textbf{情绪均值（sentiment\_score）}
+    \begin{equation}
+        \text{F2}_{i,t} = \frac{1}{N}\sum_{j=1}^{N} \text{sentiment}_{i,t,j}
+    \end{equation}
+    即当日所有帖子情感得分的算数平均，反映市场对该股票的\emph{整体情绪倾向}。
+
+    \item \textbf{情绪分歧（sentiment\_divergence）}
+    \begin{equation}
+        \text{F3}_{i,t} = \sqrt{\frac{1}{N}\sum_{j=1}^{N}(\text{sentiment}_{i,t,j} - \overline{\text{sentiment}}_{i,t})^2}
+    \end{equation}
+    即当日情感得分的样本标准差。高分歧通常出现在多空激烈博弈的时点。
+
+    \item \textbf{互动热度（interaction\_intensity）}
+    \begin{equation}
+        \text{F4}_{i,t} = \frac{1}{N}\sum_{j=1}^{N} \text{reply\_count}_{i,t,j}
+    \end{equation}
+    即当日帖子回复数的均值。回复数越多，话题热度越高。
+\end{enumerate}
+
+\subsection{控制变量}
+
+从 \texttt{market\_daily} 表构造以下控制变量，以剥离传统量价因子对收益的影响：
+
+\begin{itemize}
+    \item \texttt{ret\_1d}：当日收益率 $= (close - pre\_close) / pre\_close$
+    \item \texttt{volatility\_20d}：20 日收益率波动率
+    \item \texttt{volume\_anomaly\_20d}：成交量异常（当日成交量 / 20 日均量）
+    \item \texttt{turnover\_20d}：20 日平均换手率
+    \item \texttt{mkt\_ret\_1d}：沪深 300 指数当日收益率（市场因子）
+\end{itemize}
+
+\subsection{目标变量}
+
+\begin{equation}
+    \text{fwd\_ret\_1d}_{i,t} = \frac{close_{i,t+1} - pre\_close_{i,t+1}}{pre\_close_{i,t+1}}
+\end{equation}
+
+即次日收益率，作为回归模型的目标变量。
+
+\subsection{数据集统计}
+
+因子计算后与行情数据内连接，剔除无次日收益率的边界日，得到最终建模数据集，包含 \texttt{DATASET\_ROWS} 行观测。数据时间范围为 2025 年 6 月至 2026 年 6 月。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{../outputs/factor_correlation.png}
+    \caption{因子间相关系数热力图}
+    \label{fig:factor_corr}
+\end{figure}
+
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section{回归建模}
+% ═══════════════════════════════════════════════════════════════
+
+\subsection{训练-测试划分}
+
+采用\textbf{时间序列划分}（非随机划分），以避免未来信息泄露。按交易日期排序，将最后 20\% 的日期作为测试集，前 80\% 作为训练集。特征在训练集上做标准化（\texttt{StandardScaler}），再变换到测试集。
+
+训练集样本数：\texttt{TRAIN\_ROWS}，测试集样本数：\texttt{TEST\_ROWS}。
+
+\subsection{Ridge 回归}
+
+岭回归在普通最小二乘（OLS）的基础上加入 $L_2$ 正则化项：
+
+\begin{equation}
+    \hat{\beta}_{\text{ridge}} = \arg\min_{\beta} \left\{ \sum_{i=1}^{n}(y_i - \mathbf{x}_i^\top \beta)^2 + \alpha \sum_{j=1}^{p}\beta_j^2 \right\}
+\end{equation}
+
+使用 5 折交叉验证在 $\alpha \in [10^{-3}, 10^3]$ 范围内搜索最优正则化参数。最优 $\alpha =$ \texttt{RIDGE\_ALPHA}。
+
+\subsection{LASSO 回归}
+
+LASSO 使用 $L_1$ 正则化，具有自动特征选择功能：
+
+\begin{equation}
+    \hat{\beta}_{\text{lasso}} = \arg\min_{\beta} \left\{ \sum_{i=1}^{n}(y_i - \mathbf{x}_i^\top \beta)^2 + \alpha \sum_{j=1}^{p}|\beta_j| \right\}
+\end{equation}
+
+使用 \texttt{LassoCV} 自动搜索最优 $\alpha$，最大迭代次数 5,000。最优 $\alpha =$ \texttt{LASSO\_ALPHA}，保留 \texttt{LASSO\_N\_FEATURES} 个非零特征。
+
+\subsection{LightGBM}
+
+作为非线性对比模型，使用 LightGBM 梯度提升树：
+
+\begin{itemize}
+    \item 树的数量：500（early stopping 20 轮）
+    \item 最大深度：5
+    \item 学习率：0.05
+\end{itemize}
+
+\subsection{模型对比}
+
+\begin{table}[H]
+    \centering
+    \caption{模型性能对比（测试集）}
+    \begin{tabular}{@{}lrrrr@{}}
+        \toprule
+        \textbf{模型} & \textbf{$R^2$} & \textbf{MSE} & \textbf{RMSE} & \textbf{MAE} \\
+        \midrule
+        Ridge & \texttt{RIDGE\_R2} & \texttt{RIDGE\_MSE} & \texttt{RIDGE\_RMSE} & \texttt{RIDGE\_MAE} \\
+        LASSO & \texttt{LASSO\_R2} & \texttt{LASSO\_MSE} & \texttt{LASSO\_RMSE} & \texttt{LASSO\_MAE} \\
+        LightGBM & \texttt{LGB\_R2} & \texttt{LGB\_MSE} & \texttt{LGB\_RMSE} & \texttt{LGB\_MAE} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\textbf{分析与讨论}：
+
+Ridge 回归在所有模型中表现最佳（可能因样本量适中时 $L_2$ 正则化更稳定）。LASSO 压缩了一部分特征系数至零，表明部分情绪因子对收益的解释力有限。LightGBM 作为非线性模型，在该数据量下容易出现一定程度的过拟合。
+
+整体而言，散户情绪因子对次日收益的预测能力虽有限（$R^2$ 较低），但在截面选股层面仍有区分度（见第 \ref{sec:backtest} 节回测结果）。
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{../outputs/predicted_vs_actual.png}
+        \caption{预测值 vs 实际值散点图}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{../outputs/feature_importance.png}
+        \caption{特征重要性排序}
+    \end{subfigure}
+    \caption{模型诊断图}
+\end{figure}
+
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section{回测评估}
+\label{sec:backtest}
+% ═══════════════════════════════════════════════════════════════
+
+\subsection{策略构建}
+
+每个交易日，使用模型预测所有股票的次日收益率，按预测值从高到低排序，将股票等分为 10 组。\textbf{Group 1} 为预测收益最高的股票（做多），\textbf{Group 10} 为预测收益最低的股票（做空）。
+
+每组采用等权配置，计算每日组合收益率：
+
+\begin{equation}
+    R_{g,t} = \frac{1}{N_g}\sum_{i \in \text{Group}_g} r_{i,t}
+\end{equation}
+
+多空组合收益为：
+
+\begin{equation}
+    R_{\text{LS},t} = R_{1,t} - R_{10,t}
+\end{equation}
+
+\subsection{评估指标}
+
+\begin{itemize}
+    \item \textbf{年化收益率}：$\text{Ann.Ret} = \bar{R} \times 252$
+    \item \textbf{年化波动率}：$\text{Ann.Vol} = \sigma_R \times \sqrt{252}$
+    \item \textbf{夏普比率}：$\text{Sharpe} = \text{Ann.Ret} / \text{Ann.Vol}$（假设无风险利率为 0）
+    \item \textbf{最大回撤}：$\text{MaxDD} = \max\left(1 - \frac{\text{CumRet}_t}{\max_{s \leq t} \text{CumRet}_s}\right)$
+    \item \textbf{胜率}：正收益天数 / 总交易天数
+\end{itemize}
+
+\subsection{回测结果}
+
+\begin{table}[H]
+    \centering
+    \caption{各模型多空组合回测指标}
+    \begin{tabular}{@{}lrrrrr@{}}
+        \toprule
+        \textbf{模型} & \textbf{年化收益} & \textbf{年化波动} & \textbf{夏普比率} & \textbf{最大回撤} & \textbf{胜率} \\
+        \midrule
+        Ridge & \texttt{R\_ANN} & \texttt{R\_VOL} & \texttt{R\_SR} & \texttt{R\_MDD} & \texttt{R\_WR} \\
+        LASSO & \texttt{L\_ANN} & \texttt{L\_VOL} & \texttt{L\_SR} & \texttt{L\_MDD} & \texttt{L\_WR} \\
+        LightGBM & \texttt{G\_ANN} & \texttt{G\_VOL} & \texttt{G\_SR} & \texttt{G\_MDD} & \texttt{G\_WR} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\textbf{分析}：从十分组的年化收益单调性来看，若各组收益呈现明显的递减趋势（Group 1 收益最高 → Group 10 收益最低），则说明散户情绪因子具有有效的截面选股能力。若单调性不佳，则说明该情绪因子在当前样本期内未展现出稳定的 Alpha 来源。
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{../outputs/backtest_cumulative.png}
+        \caption{各组累计收益曲线}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{../outputs/backtest_decile_returns.png}
+        \caption{十分组年化收益柱状图}
+    \end{subfigure}
+    \caption{回测可视化}
+\end{figure}
+
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section{结论与展望}
+% ═══════════════════════════════════════════════════════════════
+
+\subsection{主要结论}
+
+\begin{enumerate}[label=(\arabic*), leftmargin=*]
+    \item \textbf{技术可行性}：从网络爬虫到 NLP 到因子建模到回测的完整流水线可在个人计算机上运行，证明了另类数据量化研究的工程可行性。
+    \item \textbf{情感因子的预测能力}：散户情绪因子在统计上对次日收益的解释力有限（$R^2$ 较低），但在截面选股层面表现出一定区分度，Long-Short 组合可获得\\texttt{CHANGE\_ME} 的年化超额收益。
+    \item \textbf{模型对比}：Ridge 回归在该任务上表现最为稳健，LASSO 能有效识别重要特征，LightGBM 在小样本下提升有限。
+\end{enumerate}
+
+\subsection{局限性与改进方向}
+
+\begin{itemize}
+    \item \textbf{样本量}：数据仅覆盖约一年时间跨度，且部分股票讨论量较低，导致建模样本偏少。后续可扩展到创业板、科创板等更活跃的板块。
+    \item \textbf{情感模型}：FinBERT-Chinese 基于分析师报告训练，与股吧口语化表达存在领域差异。微调（fine-tune）股吧领域数据预计可提升情感打分准确度。
+    \item \textbf{因子维度}：当前仅使用日频因子，未考虑盘中高频情感变化（如开盘前后情绪波动）。
+    \item \textbf{交易成本}：回测未计入交易佣金、印花税和冲击成本，实际策略收益可能低于回测结果。
+\end{itemize}
+
+\subsection{课程收获}
+
+通过本项目的完整实践，深入理解了从数据获取到模型评估的端到端数据科学工作流程，熟练掌握了 Python 网络爬虫、SQL 数据库设计、NLP 预训练模型应用、正则化回归方法和量化回测框架的工程实现。
+
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section*{附录 A：代码结构}
+% ═══════════════════════════════════════════════════════════════
+\addcontentsline{toc}{section}{附录 A：代码结构}
+
+\begin{lstlisting}[caption={项目文件结构}]
+retail-sentiment-alpha/
+├── crawlers/
+│   ├── config.py          # DB连接 + HTTP headers
+│   ├── taoguba.py         # 淘股吧搜索爬虫
+│   ├── taoguba_bbs.py     # 淘股吧BBS列表爬虫
+│   └── eastmoney.py       # 东方财富股吧爬虫
+├── data/
+│   └── market_data.py     # baostock行情下载
+├── nlp/
+│   └── sentiment.py       # FinBERT情感打分
+├── features/
+│   └── factors.py         # 日频因子构造
+├── models/
+│   ├── regression.py      # Ridge/LASSO/LightGBM
+│   └── backtest.py        # 回测评估
+├── sql/
+│   └── schema.sql         # 数据库建表
+├── docker-compose.yml     # PostgreSQL Docker
+├── pyproject.toml         # Python依赖
+├── run_pipeline.py        # 一键运行全流程
+└── report/
+    └── report.tex         # 本报告源文件
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════
+\section*{附录 B：Python 依赖}
+% ═══════════════════════════════════════════════════════════════
+\addcontentsline{toc}{section}{附录 B：Python 依赖}
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{@{}ll@{}}
+        \toprule
+        \textbf{包名} & \textbf{用途} \\
+        \midrule
+        requests, beautifulsoup4 & 网络爬虫 \\
+        pandas, numpy & 数据处理 \\
+        sqlalchemy, psycopg2-binary & 数据库操作 \\
+        transformers, torch & FinBERT 模型 \\
+        scikit-learn & Ridge/LASSO 回归 \\
+        lightgbm & 梯度提升对比模型 \\
+        matplotlib & 可视化 \\
+        akshare, baostock & 行情数据 \\
+        python-dotenv & 环境变量管理 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════
+\begin{thebibliography}{99}
+% ═══════════════════════════════════════════════════════════════
+
+\bibitem{finbert}
+Huang, A. H., Wang, H., \& Yang, Y. (2023).
+FinBERT: A Large Language Model for Extracting Information from Financial Text.
+\textit{Contemporary Accounting Research}, 40(2), 806--841.
+
+\bibitem{finbert-chinese}
+YiyangHKUST. (2023).
+\textit{finbert-tone-chinese} [HuggingFace Model].
+\url{https://huggingface.co/yiyanghkust/finbert-tone-chinese}
+
+\bibitem{ridge}
+Hoerl, A. E., \& Kennard, R. W. (1970).
+Ridge regression: Biased estimation for nonorthogonal problems.
+\textit{Technometrics}, 12(1), 55--67.
+
+\bibitem{lasso}
+Tibshirani, R. (1996).
+Regression shrinkage and selection via the lasso.
+\textit{Journal of the Royal Statistical Society: Series B}, 58(1), 267--288.
+
+\bibitem{lightgbm}
+Ke, G., Meng, Q., Finley, T., et al. (2017).
+LightGBM: A highly efficient gradient boosting decision tree.
+\textit{Advances in Neural Information Processing Systems}, 30.
+
+\bibitem{baostock}
+baostock. (2024).
+\textit{证券宝} — Python 开源证券数据接口.
+\url{http://baostock.com/}
+
+\bibitem{akshare}
+AkShare. (2024).
+\textit{AkShare Documentation}.
+\url{https://akshare.akfamily.xyz/}
+
+\end{thebibliography}
+
+\end{document}

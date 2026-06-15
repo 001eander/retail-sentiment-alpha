@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+*.egg
+.venv/
+
+# Environment
+.env
+*.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Outputs
+outputs/*.png
+*.pdf
+*.aux
+*.log
+*.out
+*.toc
+*.nav
+*.snm
+
+# Database
+*.dump
+*.sql.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model cache (re-download on each machine)
+.cache/huggingface/
