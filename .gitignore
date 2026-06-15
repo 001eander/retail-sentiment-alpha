@@ -29,6 +29,7 @@ outputs/*.png
 # Database
 *.dump
 *.sql.gz
+sentiment_alpha.sql
 
 # OS
 .DS_Store
