@@ -167,7 +167,7 @@ def parse_date(date_str: str, fallback_year: Optional[int] = None) -> Optional[d
 # ── listing page ─────────────────────────────────────────────────
 
 
-def crawl_stock_list(code: str, max_pages: int = 5, session: Optional[requests.Session] = None) -> list[dict]:
+def crawl_stock_list(code: str, max_pages: int = 25, session: Optional[requests.Session] = None) -> list[dict]:
     """Crawl listing pages for one stock and return post metadata.
 
     Iterates through ``list,{code},f_{page}.html`` (80 posts/page),
@@ -377,7 +377,7 @@ def fetch_post_detail(url: str) -> Optional[dict]:
 # ── full pipeline ────────────────────────────────────────────────
 
 
-def crawl_stock(code: str, name: str, max_list_pages: int = 5, fetch_details: bool = False) -> list[dict]:
+def crawl_stock(code: str, name: str, max_list_pages: int = 25, fetch_details: bool = False) -> list[dict]:
     """Full crawl pipeline for one stock: listing → (optional) detail → assemble.
 
     When ``fetch_details=False`` (listing-only / fast mode), uses the listing
@@ -517,7 +517,7 @@ def save_posts(posts: list[dict]) -> int:
 
 def main(
     max_stocks: int = 300,
-    max_list_pages: int = 5,
+    max_list_pages: int = 25,
     start_from: int = 0,
     fetch_details: bool = False,
 ):

@@ -102,7 +102,7 @@ def _top_stocks_fallback() -> pd.DataFrame:
 # ── search ──────────────────────────────────────────────────────
 
 
-def search_stock(code: str, max_pages: int = 5) -> list[str]:
+def search_stock(code: str, max_pages: int = 25) -> list[str]:
     """Search tgb.cn for a stock code and return list of detail-page URLs.
 
     The search/quote page embeds post links like:
@@ -212,7 +212,7 @@ def parse_post(url: str) -> Optional[dict]:
 # ── crawl loop ──────────────────────────────────────────────────
 
 
-def crawl_stock(code: str, name: str, max_search_pages: int = 3) -> list[dict]:
+def crawl_stock(code: str, name: str, max_search_pages: int = 25) -> list[dict]:
     """Crawl all posts for one stock."""
     logger.info("searching %s (%s)", code, name)
     urls = search_stock(code, max_pages=max_search_pages)
@@ -269,7 +269,7 @@ def save_posts(posts: list[dict]) -> int:
 
 def main(
     max_stocks: int = 50,
-    max_search_pages: int = 3,
+    max_search_pages: int = 25,
     start_from: int = 0,
 ):
     """Crawl 淘股吧 posts for CSI 300 stocks.
