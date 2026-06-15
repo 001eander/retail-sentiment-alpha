@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>零售情绪 Alpha - Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        slate: { 750: '#293548', 850: '#151f32', 900: '#0f172a' },
+                        financial: { up: '#ef4444', down: '#10b981', neutral: '#64748b' }
+                    },
+                    fontFamily: { sans: ['"PingFang SC"', '"Microsoft YaHei"', 'Inter', 'sans-serif'] }
+                }
+            }
+        }
+    </script>
+    <style>
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); padding: 1.25rem; }
+        .shimmer { animation: shimmer 2s infinite linear; background: linear-gradient(to right, #1e293b 4%, #334155 25%, #1e293b 36%); background-size: 1000px 100%; }
+        @keyframes shimmer { 0% { background-position: -1000px 0; } 100% { background-position: 1000px 0; } }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased min-h-screen flex flex-col">
+
+    <div id="loading-state" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-900">
+        <div class="w-12 h-12 border-4 border-slate-700 border-t-blue-500 rounded-full animate-spin mb-4"></div>
+        <p class="text-slate-400 font-medium tracking-widest animate-pulse">正在加载数据...</p>
+    </div>
+
+    <div id="error-state" class="hidden fixed inset-0 z-40 flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm">
+        <div class="bg-slate-800 border border-red-500/30 p-8 rounded-2xl max-w-md text-center shadow-2xl">
+            <svg class="w-16 h-16 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <h3 class="text-xl font-bold text-white mb-2">数据加载失败</h3>
+            <p id="error-msg" class="text-slate-400 mb-6">无法连接到服务器接口</p>
+            <button onclick="fetchData()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">重试</button>
+        </div>
+    </div>
+
+    <div id="app" class="hidden flex-1 w-full max-w-[1600px] mx-auto p-4 md:p-6 lg:p-8 space-y-6">
+        <header class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+            <div>
+                <h1 class="text-2xl font-bold text-white tracking-wide flex items-center gap-2">
+                    <svg class="w-6 h-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                    </svg>
+                    零售情绪 Alpha
+                </h1>
+                <p class="text-sm text-slate-400 mt-1">A股散户情绪监测与量化因子控制台</p>
+            </div>
+            <div class="text-sm text-slate-400 bg-slate-800 px-4 py-2 rounded-lg border border-slate-700 flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                最新同步: <span id="last-updated" class="text-slate-200">--</span>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+            <div class="card relative overflow-hidden group">
+                <div class="absolute top-0 right-0 w-24 h-24 bg-blue-500/10 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150"></div>
+                <h3 class="text-slate-400 text-sm font-medium">累计监控帖子</h3>
+                <div class="mt-2 flex items-baseline gap-2"><span id="stat-total" class="text-3xl font-bold text-white">--</span></div>
+            </div>
+            <div class="card relative overflow-hidden group">
+                <div class="absolute top-0 right-0 w-24 h-24 bg-indigo-500/10 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150"></div>
+                <h3 class="text-slate-400 text-sm font-medium">今日新增</h3>
+                <div class="mt-2 flex items-baseline gap-2"><span id="stat-today" class="text-3xl font-bold text-white">--</span></div>
+            </div>
+            <div class="card relative overflow-hidden group">
+                <div class="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150"></div>
+                <h3 class="text-slate-400 text-sm font-medium">已完成情感分析</h3>
+                <div class="mt-2 flex items-baseline gap-2">
+                    <span id="stat-scored" class="text-3xl font-bold text-white">--</span>
+                    <span id="stat-scored-pct" class="text-sm text-slate-400">--%</span>
+                </div>
+            </div>
+            <div class="card relative overflow-hidden group">
+                <div class="absolute top-0 right-0 w-24 h-24 bg-red-500/10 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150"></div>
+                <h3 class="text-slate-400 text-sm font-medium">全市场情绪均值</h3>
+                <div class="mt-2 flex items-baseline gap-2"><span id="stat-sentiment" class="text-3xl font-bold text-white">--</span></div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
+            <div class="card">
+                <h3 class="text-lg font-medium text-slate-200 mb-4">数据来源占比</h3>
+                <div class="h-64 w-full relative flex justify-center"><canvas id="platformChart"></canvas></div>
+            </div>
+            <div class="card">
+                <h3 class="text-lg font-medium text-slate-200 mb-4">全量情绪分布</h3>
+                <div class="h-64 w-full"><canvas id="sentimentChart"></canvas></div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 md:gap-6">
+            <div class="card xl:col-span-2 flex flex-col h-[500px]">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-medium text-slate-200">最新舆情动态</h3>
+                </div>
+                <div class="flex-1 overflow-auto -mx-5 px-5">
+                    <table class="w-full text-left text-sm whitespace-nowrap">
+                        <thead class="text-slate-400 sticky top-0 bg-slate-800 z-10 shadow-sm border-b border-slate-700">
+                            <tr>
+                                <th class="py-3 font-medium">标的</th>
+                                <th class="py-3 font-medium">标题</th>
+                                <th class="py-3 font-medium px-2">来源</th>
+                                <th class="py-3 font-medium text-center">情绪</th>
+                                <th class="py-3 font-medium text-right">发布时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="posts-table-body" class="divide-y divide-slate-700/50"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-4 md:gap-6">
+                <div class="card flex-1 flex flex-col">
+                    <h3 class="text-lg font-medium text-slate-200 mb-4">当前最热个股 Top 10</h3>
+                    <div class="flex-1 overflow-auto -mx-5 px-5">
+                        <ul id="top-stocks-list" class="space-y-3"></ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        Chart.defaults.color = '#94a3b8';
+        Chart.defaults.borderColor = '#334155';
+        Chart.defaults.font.family = '"PingFang SC", "Microsoft YaHei", Inter, sans-serif';
+
+        let platformChart, sentimentChart;
+
+        function formatNumber(num) {
+            if (num >= 100000000) return (num / 100000000).toFixed(2) + '亿';
+            if (num >= 10000) return (num / 10000).toFixed(1) + '万';
+            return num.toLocaleString();
+        }
+
+        function timeAgo(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffMins = Math.floor(diffMs / 60000);
+            if (diffMins < 1) return '刚刚';
+            if (diffMins < 60) return `${diffMins}分钟前`;
+            const diffHours = Math.floor(diffMins / 60);
+            if (diffHours < 24) return `${diffHours}小时前`;
+            const diffDays = Math.floor(diffHours / 24);
+            if (diffDays < 30) return `${diffDays}天前`;
+            return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+        }
+
+        function getSentimentLabel(sentiment) {
+            if (sentiment === null || sentiment === undefined) return { label: '未评分', class: 'bg-slate-500/10 text-slate-500 border border-slate-500/20' };
+            if (sentiment > 0.2) return { label: '看多', class: 'bg-red-500/10 text-red-400 border border-red-500/20' };
+            if (sentiment < -0.2) return { label: '看空', class: 'bg-green-500/10 text-green-400 border border-green-500/20' };
+            return { label: '中性', class: 'bg-slate-500/10 text-slate-400 border border-slate-500/20' };
+        }
+
+        async function fetchData() {
+            document.getElementById('error-state').classList.add('hidden');
+            document.getElementById('loading-state').classList.remove('hidden');
+            document.getElementById('app').classList.add('hidden');
+            try {
+                const response = await fetch('/api/dashboard');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                renderDashboard(data);
+            } catch (error) {
+                document.getElementById('error-msg').textContent = error.message;
+                document.getElementById('loading-state').classList.add('hidden');
+                document.getElementById('error-state').classList.remove('hidden');
+            }
+        }
+
+        function renderDashboard(data) {
+            const now = new Date();
+            document.getElementById('last-updated').textContent = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute:'2-digit', second:'2-digit' });
+
+            const s = data.stats;
+            document.getElementById('stat-total').textContent = formatNumber(s.total);
+            document.getElementById('stat-today').textContent = formatNumber(s.today);
+            document.getElementById('stat-scored').textContent = formatNumber(s.scored);
+            const scoredPct = s.total ? ((s.scored / s.total) * 100).toFixed(1) : 0;
+            document.getElementById('stat-scored-pct').textContent = `(${scoredPct}%)`;
+            const sentEl = document.getElementById('stat-sentiment');
+            sentEl.textContent = s.sentiment_avg >= 0 ? `+${s.sentiment_avg.toFixed(2)}` : s.sentiment_avg.toFixed(2);
+            sentEl.className = `text-3xl font-bold ${s.sentiment_avg > 0 ? 'text-red-400' : (s.sentiment_avg < 0 ? 'text-green-400' : 'text-slate-300')}`;
+
+            renderPlatformChart(data.platforms);
+            renderSentimentChart(data.sentiment_dist);
+
+            const tbody = document.getElementById('posts-table-body');
+            tbody.innerHTML = '';
+            data.recent_posts.forEach(post => {
+                const badge = getSentimentLabel(post.sentiment);
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-800/80 transition-colors';
+                tr.innerHTML = `
+                    <td class="py-3 pr-4">
+                        <div class="flex items-center gap-2">
+                            <span class="font-medium text-slate-200">${post.stock_name || ''}</span>
+                            <span class="text-xs text-slate-500 font-mono">${post.stock_code}</span>
+                        </div>
+                    </td>
+                    <td class="py-3 pr-4 max-w-[300px]">
+                        <p class="truncate text-slate-300" title="${post.title}">${post.title}</p>
+                    </td>
+                    <td class="py-3 px-2"><span class="text-xs text-slate-400">${post.platform}</span></td>
+                    <td class="py-3 text-center">
+                        <span class="px-2.5 py-0.5 rounded text-xs ${badge.class}">${badge.label}</span>
+                    </td>
+                    <td class="py-3 text-right text-slate-500 text-sm">${timeAgo(post.post_time)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            const topList = document.getElementById('top-stocks-list');
+            topList.innerHTML = '';
+            data.top_stocks.forEach((stock, index) => {
+                const li = document.createElement('li');
+                li.className = 'flex items-center justify-between p-2 rounded-lg hover:bg-slate-700/30 transition-colors';
+                let rankClass = 'bg-slate-700 text-slate-400';
+                if (index === 0) rankClass = 'bg-red-500 text-white';
+                if (index === 1) rankClass = 'bg-orange-500 text-white';
+                if (index === 2) rankClass = 'bg-yellow-500 text-white';
+                const avgS = stock.avg_sentiment || 0;
+                li.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="w-6 h-6 rounded-md flex items-center justify-center text-xs font-bold ${rankClass}">${index + 1}</span>
+                        <div class="flex flex-col">
+                            <span class="text-slate-200 font-medium">${stock.name}</span>
+                            <span class="text-xs text-slate-500 font-mono">${stock.code}</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-col items-end">
+                        <span class="text-sm text-slate-300">${formatNumber(stock.count)}贴</span>
+                        <span class="text-xs ${avgS >= 0 ? 'text-red-400' : 'text-green-400'}">情绪: ${avgS >= 0 ? '+' : ''}${avgS.toFixed(2)}</span>
+                    </div>
+                `;
+                topList.appendChild(li);
+            });
+
+            document.getElementById('loading-state').classList.add('hidden');
+            document.getElementById('app').classList.remove('hidden');
+        }
+
+        function renderPlatformChart(data) {
+            const ctx = document.getElementById('platformChart').getContext('2d');
+            if (platformChart) platformChart.destroy();
+            platformChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['东方财富', '淘股吧', '其他'],
+                    datasets: [{
+                        data: [data.eastmoney || 0, data.taoguba || 0, data.others || 0],
+                        backgroundColor: ['#3b82f6', '#8b5cf6', '#475569'],
+                        borderWidth: 0,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: { legend: { position: 'bottom', labels: { padding: 20, usePointStyle: true, color: '#cbd5e1' } } }
+                }
+            });
+        }
+
+        function renderSentimentChart(data) {
+            const ctx = document.getElementById('sentimentChart').getContext('2d');
+            if (sentimentChart) sentimentChart.destroy();
+            sentimentChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['看多', '中性', '看空'],
+                    datasets: [{
+                        data: [data.positive || 0, data.neutral || 0, data.negative || 0],
+                        backgroundColor: ['rgba(239, 68, 68, 0.8)', 'rgba(100, 116, 139, 0.8)', 'rgba(16, 185, 129, 0.8)'],
+                        borderRadius: 4,
+                        barThickness: 32
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: 'rgba(51, 65, 85, 0.5)' }, ticks: { maxTicksLimit: 5 } },
+                        y: { grid: { display: false } }
+                    }
+                }
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', fetchData);
+    </script>
+</body>
+</html>

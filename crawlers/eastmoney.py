@@ -24,8 +24,11 @@ from typing import Optional
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
+from sqlalchemy import text
 
 from .config import engine
+# TODO(tech-debt): extract get_stock_list to config.py or a shared
+# utils module to break the eastmoney → taoguba dependency.
 from .taoguba import get_stock_list
 
 logger = logging.getLogger(__name__)
@@ -73,7 +76,8 @@ def _safe_get(
     sess = session or requests
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            time.sleep(random.uniform(*delay_range))
+            if attempt == 1:
+                time.sleep(random.uniform(*delay_range))
             resp = sess.get(url, headers=HEADERS, timeout=30)
             if resp.status_code != 200:
                 logger.warning("HTTP %d for %s", resp.status_code, url)
@@ -113,7 +117,7 @@ def _parse_int(text: str) -> int:
 # ── date parsing ─────────────────────────────────────────────────
 
 
-def parse_date(date_str: str, fallback_year: int = 2026) -> Optional[datetime]:
+def parse_date(date_str: str, fallback_year: Optional[int] = None) -> Optional[datetime]:
     """Parse an EastMoney date string into a ``datetime``.
 
     Handles two common formats:
@@ -130,6 +134,8 @@ def parse_date(date_str: str, fallback_year: int = 2026) -> Optional[datetime]:
     if not date_str or not date_str.strip():
         return None
     date_str = date_str.strip()
+    if fallback_year is None:
+        fallback_year = datetime.now().year
 
     # Full format: YYYY-MM-DD HH:MM
     try:
@@ -161,7 +167,7 @@ def parse_date(date_str: str, fallback_year: int = 2026) -> Optional[datetime]:
 # ── listing page ─────────────────────────────────────────────────
 
 
-def crawl_stock_list(code: str, max_pages: int = 5) -> list[dict]:
+def crawl_stock_list(code: str, max_pages: int = 5, session: Optional[requests.Session] = None) -> list[dict]:
     """Crawl listing pages for one stock and return post metadata.
 
     Iterates through ``list,{code},f_{page}.html`` (80 posts/page),
@@ -173,13 +179,16 @@ def crawl_stock_list(code: str, max_pages: int = 5) -> list[dict]:
     Args:
         code: 6-digit stock code (e.g. ``'600519'``).
         max_pages: Maximum listing pages to crawl.
+        session: Reusable ``requests.Session`` (or ``None`` for ad-hoc).
 
     Returns:
         List of dicts with keys:
             post_id, title, url, author, read_count, reply_count, post_time_str
     """
     posts: list[dict] = []
-    session = requests.Session()
+    own_session = session is None
+    if own_session:
+        session = requests.Session()
 
     for page in range(1, max_pages + 1):
         url = LIST_URL_TPL_P1.format(code=code) if page == 1 else LIST_URL_TPL.format(code=code, page=page)
@@ -213,7 +222,8 @@ def crawl_stock_list(code: str, max_pages: int = 5) -> list[dict]:
             logger.info("page %d returned 0 posts — stopping listing crawl for %s", page, code)
             break
 
-    session.close()
+    if own_session:
+        session.close()
     return posts
 
 
@@ -290,7 +300,7 @@ def _extract_post_id(href: str, code: str) -> str:
     m = re.search(r"/(\d+)\.html", href)
     if m:
         return m.group(1)
-    return href  # return as-is if extraction failed
+    return ""  # empty → caller knows extraction failed
 
 
 # ── detail page ──────────────────────────────────────────────────
@@ -298,6 +308,21 @@ def _extract_post_id(href: str, code: str) -> str:
 
 def fetch_post_detail(url: str) -> Optional[dict]:
     """Fetch and parse an EastMoney post detail page.
+
+    .. warning::
+
+        **BROKEN (2026-06-15)** — 当前页面结构已不兼容，三个问题：
+
+        1. **编码**: 页面返回 GBK 内容但 ``_safe_get`` 未强制设置 ``resp.encoding``，
+           导致中文乱码，BS4 解析出的选择器内容全部为乱码。
+        2. **正文不在静态 DOM 中**: ``.xeditor_content`` 里的正文由 JS 动态填充，
+           静态 HTTP 请求只能拿到 ``<p><br></p>`` 空壳。
+        3. **真实数据源**: 正文嵌入在 ``<script>var post_article = {...}`` 的 JSON
+           中，字段为 ``post_content``（HTML 片段）。修复方案：
+           用正则提取 ``var post_article`` JSON → ``json.loads`` →
+           对 ``post_content`` 做 BS4 去标签取纯文本。
+
+        在此之前请使用快速模式（``fetch_details=False``，仅抓列表页标题）。
 
     Args:
         url: Full URL of the post (``/news,{code},{post_id}.html``).
@@ -352,12 +377,17 @@ def fetch_post_detail(url: str) -> Optional[dict]:
 # ── full pipeline ────────────────────────────────────────────────
 
 
-def crawl_stock(code: str, name: str, max_list_pages: int = 5, fetch_details: bool = True) -> list[dict]:
+def crawl_stock(code: str, name: str, max_list_pages: int = 5, fetch_details: bool = False) -> list[dict]:
     """Full crawl pipeline for one stock: listing → (optional) detail → assemble.
 
     When ``fetch_details=False`` (listing-only / fast mode), uses the listing
     title as content and infers the date from the listing time string.  This
     is ~10× faster and yields ~80 posts per page — adequate for bulk sentiment.
+
+    .. warning::
+
+        ``fetch_details=True`` is currently **BROKEN** (see :func:`fetch_post_detail`).
+        Do not use until the ``var post_article`` JSON extraction approach is implemented.
 
     Args:
         code: 6-digit stock code.
@@ -370,7 +400,8 @@ def crawl_stock(code: str, name: str, max_list_pages: int = 5, fetch_details: bo
     """
     logger.info("crawling %s (%s) %s", code, name, "(listing-only)" if not fetch_details else "")
 
-    listing_posts = crawl_stock_list(code, max_pages=max_list_pages)
+    with requests.Session() as session:
+        listing_posts = crawl_stock_list(code, max_pages=max_list_pages, session=session)
     logger.info("listing for %s: %d posts found", code, len(listing_posts))
 
     results: list[dict] = []
@@ -443,37 +474,42 @@ def save_posts(posts: list[dict]) -> int:
     if "post_time" in df.columns:
         df["post_time"] = pd.to_datetime(df["post_time"], errors="coerce")
 
-    from sqlalchemy import text
+    # Serialize post_time for the SQL text statement
+    records: list[dict] = []
+    for _, row in df.iterrows():
+        d = row.to_dict()
+        pt = d.get("post_time")
+        if pt is None or (isinstance(pt, pd.Timestamp) and pd.isna(pt)):
+            d["post_time"] = None
+        elif isinstance(pt, pd.Timestamp):
+            d["post_time"] = pt.to_pydatetime().isoformat()
+        elif isinstance(pt, datetime):
+            d["post_time"] = pt.isoformat()
+        else:
+            # covers pd.NaT / float("nan") / invalid types
+            d["post_time"] = None
+        records.append(d)
 
-    saved = 0
+    stmt = text("""
+        INSERT INTO posts (platform, stock_code, stock_name, title, content,
+                           author, post_time, read_count, reply_count, url)
+        VALUES (:platform, :stock_code, :stock_name, :title, :content,
+                :author, :post_time, :read_count, :reply_count, :url)
+        ON CONFLICT (url) DO NOTHING
+    """)
+
     with engine.begin() as conn:
-        for _, row in df.iterrows():
-            d = row.to_dict()
+        # Count existing URLs before insert for accurate inserted count
+        urls = [r["url"] for r in records]
+        existing_count = conn.execute(
+            text("SELECT COUNT(*) FROM posts WHERE url = ANY(:urls)"),
+            {"urls": urls},
+        ).scalar()
 
-            # Serialize post_time for the SQL text statement
-            pt = d.get("post_time")
-            if pt is None:
-                d["post_time"] = None
-            elif isinstance(pt, pd.Timestamp):
-                d["post_time"] = pt.to_pydatetime().isoformat()
-            elif isinstance(pt, datetime):
-                d["post_time"] = pt.isoformat()
-            else:
-                # covers pd.NaT / float("nan") / invalid types
-                d["post_time"] = None
+        # Single bulk INSERT — SQLAlchemy will execute with executemany
+        conn.execute(stmt, records)
 
-            stmt = text("""
-                INSERT INTO posts (platform, stock_code, stock_name, title, content,
-                                   author, post_time, read_count, reply_count, url)
-                VALUES (:platform, :stock_code, :stock_name, :title, :content,
-                        :author, :post_time, :read_count, :reply_count, :url)
-                ON CONFLICT (url) DO NOTHING
-            """)
-            result = conn.execute(stmt, d)
-            if result.rowcount > 0:
-                saved += 1
-
-    return saved
+    return len(records) - existing_count
 
 
 # ── main ─────────────────────────────────────────────────────────
